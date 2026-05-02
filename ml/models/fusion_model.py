@@ -162,13 +162,16 @@ class FusionModel(nn.Module):
 
         for mod in self.MODALITIES:
             score = scores.get(mod, torch.zeros(B, 1, device=next(self.parameters()).device))
+            emb = embeddings.get(mod)
 
-            # Apply modality dropout
+            # Apply modality dropout: zero both score AND embedding for one
+            # modality per batch. Substituting None for emb here would mismatch
+            # the gate's in_dim (which was sized for score+emb), so we keep emb
+            # the same shape and zero its values.
             if mod == dropped_modality:
                 score = torch.zeros_like(score)
-                emb = None
-            else:
-                emb = embeddings.get(mod)
+                if emb is not None:
+                    emb = torch.zeros_like(emb)
 
             gated, attn = self.gates[mod](score, emb)
             gated_vectors.append(gated)        # (B, gate_out_dim)

@@ -155,13 +155,21 @@ def _call_fusion(
                 k: torch.tensor([[scores_dict[k] / 100.0]], dtype=torch.float32)
                 for k in ["face", "lipsync", "voice", "blink", "headmotion"]
             }
+            # FusionModel's gates were sized for specific embedding dims (read
+            # from data/cache/dims.json at load time). When an analyzer returns
+            # None (heuristic fallback gave no embedding), substitute a zero
+            # tensor of the right dim — passing None would mismatch the gate's
+            # in_dim and crash.
+            dims = _read_dims()
             emb_t: dict[str, torch.Tensor] = {}
             for k in ("face", "voice", "lipsync"):
                 e = embeddings_dict.get(k)
                 if e is not None:
                     arr = np.asarray(e, dtype=np.float32).reshape(1, -1)
                     emb_t[k] = torch.from_numpy(arr)
-            out = model(score_t, embeddings=emb_t or None, return_weights=True)
+                else:
+                    emb_t[k] = torch.zeros((1, dims[k]), dtype=torch.float32)
+            out = model(score_t, embeddings=emb_t, return_weights=True)
             logit = float(out["logit"].item())
             attn = out["attn_weights"].squeeze(0).cpu().numpy()  # (5,)
             attn_dict = {
