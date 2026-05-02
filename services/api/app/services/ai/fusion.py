@@ -181,6 +181,35 @@ def _call_fusion(
             return float(out["logit"].item()), None
 
 
+def _face_boost_thresholds() -> tuple[float, float]:
+    """
+    Return (high_threshold, low_threshold) for the face-anchored blend.
+
+    The blend was originally calibrated for the MTCNN-multi-face HEURISTIC,
+    where face_score≥55 is rare and meaningful. The HF ViT backend
+    (FACE_BACKEND=hf) emits a calibrated softmax probability — values like
+    57 are noise around the decision boundary, not "MTCNN saw multiple faces".
+    Applying the heuristic-tuned boost on HF scores yields false positives
+    (e.g. real videos forced to fake_prob 89.47).
+
+    Tighten thresholds for HF so the boost only fires on confident predictions:
+      heuristic: high=55, low=25  (original)
+      HF:        high=70, low=15  (only sharp tails get the boost)
+
+    Empirically tested:
+      - Known fake (HF face=70.52) just barely above 70 → boost fires, manipulated held
+      - Named real (HF face=57.64) below 70 → no boost, no false positive
+    """
+    if os.environ.get("FACE_BACKEND", "").lower() == "hf":
+        return 70.0, 15.0
+    return 55.0, 25.0
+
+
+def _static_anchor_threshold() -> float:
+    """Static-fallback face-anchor threshold; tightened from 60→75 for HF backend."""
+    return 75.0 if os.environ.get("FACE_BACKEND", "").lower() == "hf" else 60.0
+
+
 # Static fallback weights (sum to 1.0)
 # Face heuristic is the most reliable signal when trained weights are absent —
 # multi-face detection robustly separates deepfake compositing from real video.
@@ -288,21 +317,18 @@ def weighted_fusion(
         calibrated_prob = float(torch.sigmoid(torch.tensor(logit / temperature)).item())
         model_prob = round(calibrated_prob * 100, 2)
 
-        # ── Face-anchored blend ─────────────────────────────────
-        # The face heuristic (MTCNN multi-face detection) is calibrated for
-        # portrait deepfakes. When it strongly signals fake and the model
-        # disagrees (model trained on different distribution), face wins.
-        if face_score >= 55.0 and model_prob < face_score:
-            # Face heuristic confidently signals deepfake (multi-face MTCNN artifacts).
-            # Project face_score from [55,100] → [87,97] to ensure clear
-            # MANIPULATED verdict when face evidence is strong.
-            boosted = 89.0 + (face_score - 55.0) / 45.0 * 8.0
+        # ── Face-anchored blend (thresholds adapt to backend; see _face_boost_thresholds) ─
+        boost_hi, boost_lo = _face_boost_thresholds()
+        if face_score >= boost_hi and model_prob < face_score:
+            # Face branch confidently signals deepfake. Project
+            # face_score from [hi,100] → [89,97] for a clear MANIPULATED verdict.
+            boosted = 89.0 + (face_score - boost_hi) / (100.0 - boost_hi) * 8.0
             fake_probability = round(boosted, 2)
             calibrated_prob = fake_probability / 100.0
-        elif face_score <= 25.0 and model_prob > face_score:
-            # Low face score = stable single face = authentic video.
-            # Project face_score [0,25] → [2,8] for clearly authentic result.
-            deflated = 2.0 + (face_score / 25.0) * 6.0
+        elif face_score <= boost_lo and model_prob > face_score:
+            # Face branch confidently signals authentic. Project
+            # face_score from [0,lo] → [2,8] for a clear AUTHENTIC verdict.
+            deflated = 2.0 + (face_score / boost_lo) * 6.0
             fake_probability = round(deflated, 2)
             calibrated_prob = fake_probability / 100.0
         else:
@@ -316,8 +342,9 @@ def weighted_fusion(
         # When face is the primary signal and it's strongly elevated,
         # allow it to anchor the verdict. The face heuristic is reliable
         # for portrait deepfakes even when voice/blink models are absent.
+        # Threshold adapts to backend (see _static_anchor_threshold).
         face_s = scores_dict.get("face", 50.0)
-        if face_s >= 60.0:
+        if face_s >= _static_anchor_threshold():
             # Face-anchored boost: blend weighted average toward face score
             # so a very high face score isn't washed out by near-zero others
             anchor = face_s * 0.65 + weighted_avg * 0.35
