@@ -46,6 +46,7 @@ async def create_video_and_job(
     mime_type: str,
     file_path: str,
     file_hash: str,
+    user_id: uuid.UUID,
 ) -> tuple[Video, AnalysisJob]:
     video = Video(
         filename=filename,
@@ -54,6 +55,7 @@ async def create_video_and_job(
         mime_type=mime_type,
         file_hash=file_hash,
         storage_path=file_path,
+        user_id=user_id,
     )
     db.add(video)
     await db.flush()
@@ -72,10 +74,18 @@ async def get_video(db: AsyncSession, video_id: uuid.UUID) -> Video | None:
 
 
 async def list_videos(
-    db: AsyncSession, page: int = 1, per_page: int = 20, search: str | None = None
+    db: AsyncSession,
+    page: int = 1,
+    per_page: int = 20,
+    search: str | None = None,
+    owner_id: uuid.UUID | None = None,
 ) -> tuple[list[Video], int]:
     query = select(Video).order_by(Video.created_at.desc())
     count_query = select(func.count(Video.id))
+
+    if owner_id is not None:
+        query = query.where(Video.user_id == owner_id)
+        count_query = count_query.where(Video.user_id == owner_id)
 
     if search:
         query = query.where(Video.original_name.ilike(f"%{search}%"))

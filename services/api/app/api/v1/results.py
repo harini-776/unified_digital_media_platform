@@ -1,13 +1,13 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.config import get_settings
+from app.core.deps import assert_video_owner, get_current_user
 from app.models.job import AnalysisJob
 from app.models.result import AnalysisResult
-from app.models.video import Video
+from app.models.user import User
 from app.models.blockchain import BlockchainRecord
 from app.schemas.result import AnalysisResultResponse, SignalBreakdown, BlockchainStatus
 
@@ -19,8 +19,12 @@ router = APIRouter()
 async def get_video_result(
     video_id: UUID,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """Get the analysis result for a specific video."""
+    """Get the analysis result for a specific video. Owner-only (admins see all)."""
+    # Ownership check up front. Returns 404 on miss (not 403) — see deps.assert_video_owner.
+    video = await assert_video_owner(db, video_id, user)
+
     # Find the latest completed job for this video
     job_result = await db.execute(
         select(AnalysisJob)
@@ -41,16 +45,10 @@ async def get_video_result(
     if not result:
         raise HTTPException(404, "Analysis result not found")
 
-    video_query = await db.execute(select(Video).where(Video.id == video_id))
-    video = video_query.scalar_one_or_none()
-
-    # Check for blockchain record
-    bc_record = None
-    if video:
-        bc_query = await db.execute(
-            select(BlockchainRecord).where(BlockchainRecord.video_hash == video.file_hash)
-        )
-        bc_record = bc_query.scalar_one_or_none()
+    bc_query = await db.execute(
+        select(BlockchainRecord).where(BlockchainRecord.video_hash == video.file_hash)
+    )
+    bc_record = bc_query.scalar_one_or_none()
 
     return AnalysisResultResponse(
         id=result.id,
@@ -83,6 +81,6 @@ async def get_video_result(
             network=bc_record.network if bc_record else None,
         ),
         created_at=result.created_at,
-        video_name=video.original_name if video else None,
+        video_name=video.original_name,
         share_url=f"/share/{result.id}",
     )
