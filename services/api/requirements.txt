@@ -16,6 +16,9 @@ redis>=5.2.0
 # Auth
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
+# Pin bcrypt < 4: passlib 1.7.4 reads bcrypt.__about__.__version__ which was
+# removed in bcrypt 4.x. Without this pin, password hashing throws on first call.
+bcrypt>=3.2.0,<4.0.0
 
 # Rate limiting
 slowapi>=0.1.9
@@ -50,7 +53,9 @@ web3>=7.0.0
 
 # Utils
 pydantic>=2.10.0
+pydantic[email]>=2.10.0
 pydantic-settings>=2.7.0
+email-validator>=2.2.0
 python-dotenv>=1.0.0
 httpx>=0.28.0
 aiofiles>=24.1.0

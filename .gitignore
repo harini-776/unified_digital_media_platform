@@ -60,3 +60,9 @@ firebase-debug.log
 coverage/
 htmlcov/
 .coverage
+
+# Local agent / tool state
+.claude/
+
+# DB snapshots taken before migrations — never commit these
+pre_migration_backup*.sql
