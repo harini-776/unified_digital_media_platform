@@ -1,0 +1,145 @@
+# ─────────────────────────────────────────────────────────────────
+#  Multimodal Deepfake Detection — Master Config
+# ─────────────────────────────────────────────────────────────────
+
+seed: 42
+device: "cpu"          # "cpu" or "cuda"
+num_workers: 4
+
+# ──────────────────────────────
+#  Data
+# ──────────────────────────────
+data:
+  root: "./data"
+  cache_dir: "./data/cache"
+  train_split: 0.70
+  val_split:   0.15
+  test_split:  0.15
+  # Identity-disjoint splits (no same face in train + val/test)
+  identity_disjoint: true
+
+  # Frame sampling
+  target_fps: 10          # uniform temporal sampling rate
+  num_frames: 32          # clips of 32 frames
+  multi_clip_inference: 3 # TTA: average over N clips
+
+  # Face alignment
+  face_size: 224          # crop size after alignment
+  face_margin: 0.3        # margin around detected face
+
+  # Augmentation (training only)
+  augmentations:
+    compression_crf_range: [18, 40]     # simulate re-encoding
+    blur_sigma_max: 2.0
+    noise_std_max: 0.05
+    color_jitter:
+      brightness: 0.3
+      contrast:   0.3
+      saturation: 0.2
+      hue:        0.1
+    random_crop_scale: [0.85, 1.0]
+    frame_drop_prob: 0.1
+    fps_jitter_range: [0.8, 1.2]
+    mixup_alpha: 0.4
+    cutmix_prob: 0.3
+    label_smoothing: 0.1
+
+# ──────────────────────────────
+#  Expert Branches
+# ──────────────────────────────
+face:
+  backbone: "efficientnet_b4"   # or "resnet50"
+  temporal: "transformer"        # "lstm" | "transformer" | "conv1d"
+  temporal_heads: 4
+  temporal_layers: 2
+  dropout: 0.3
+  pretrained: true
+  embedding_dim: 256
+  num_frames_train: 32
+  batch_size: 8
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  epochs: 30
+  focal_loss_gamma: 2.0
+  checkpoint_dir: "./weights/face"
+
+lipsync:
+  audio_encoder: "wav2vec2"     # or "mfcc_cnn"
+  video_encoder: "resnet18"
+  embedding_dim: 512
+  window_sec: 0.5               # audio-visual window
+  stride_sec: 0.25
+  batch_size: 16
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  epochs: 25
+  checkpoint_dir: "./weights/lipsync"
+
+voice:
+  encoder: "wav2vec2"           # or "ecapa"
+  classifier: "mlp"
+  embedding_dim: 256
+  segment_sec: 3.0
+  batch_size: 32
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  epochs: 20
+  checkpoint_dir: "./weights/voice"
+
+blink:
+  feature_method: "ear_timeseries"   # Eye Aspect Ratio
+  classifier: "xgboost"              # or "mlp"
+  ear_window: 5                      # smoothing window
+  min_sequence_len: 20
+  checkpoint_dir: "./weights/blink"
+
+headmotion:
+  feature_method: "pose_timeseries"  # yaw/pitch/roll
+  classifier: "xgboost"             # or "mlp"
+  n_estimators: 200
+  max_depth: 6
+  checkpoint_dir: "./weights/headmotion"
+
+# ──────────────────────────────
+#  Fusion Model
+# ──────────────────────────────
+fusion:
+  architecture: "attention_mlp"   # "attention_mlp" | "transformer" | "gated_mlp"
+  input_scores: 5                 # 5 expert scores
+  use_embeddings: true            # concatenate intermediate embeddings
+  embedding_total_dim: 1024       # sum of expert embedding dims
+  hidden_dim: 128
+  num_heads: 4
+  num_layers: 2
+  dropout: 0.3
+  modality_dropout_prob: 0.2      # randomly zero-out one modality during training
+  batch_size: 64
+  lr: 5.0e-4
+  weight_decay: 1.0e-4
+  epochs: 40
+  label_smoothing: 0.05
+  focal_loss_gamma: 2.0
+  checkpoint_dir: "./weights/fusion"
+
+# ──────────────────────────────
+#  Calibration
+# ──────────────────────────────
+calibration:
+  method: "temperature_scaling"   # or "isotonic"
+  val_fraction: 0.2
+
+# ──────────────────────────────
+#  Uncertainty
+# ──────────────────────────────
+uncertainty:
+  entropy_threshold_low:    0.3
+  entropy_threshold_high:   0.7
+  disagreement_threshold:   30.0   # std dev of expert scores
+
+# ──────────────────────────────
+#  Evaluation
+# ──────────────────────────────
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "auc_roc", "eer", "ece"]
+  cross_dataset: true
+  ablation: true

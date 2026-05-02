@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: deepfake_trust
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    env_file: services/api/.env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - uploads:/app/uploads
+      - outputs:/app/outputs
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    env_file: services/api/.env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - uploads:/app/uploads
+      - outputs:/app/outputs
+
+  web:
+    build:
+      context: apps/web
+      dockerfile: ../../docker/Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+
+volumes:
+  pgdata:
+  uploads:
+  outputs:
