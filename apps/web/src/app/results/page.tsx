@@ -11,10 +11,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Scan, Mic, Ear, Eye, Activity, Share2,
   AlertTriangle, CheckCircle, Brain, ArrowLeft, Info,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import type { Verdict } from "@/types";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -177,6 +179,7 @@ function SignalCard({ icon, iconBg, title, score, description, details, weight }
 // ─── Main results ─────────────────────────────────────────────────────────────
 
 function ResultsContent() {
+  const auth = useRequireAuth();
   const searchParams = useSearchParams();
   const jobId   = searchParams.get("job_id");
   const videoId = searchParams.get("video_id");
@@ -184,7 +187,7 @@ function ResultsContent() {
   const jobQuery = useQuery({
     queryKey: ["job", jobId],
     queryFn: () => getJobStatus(jobId!),
-    enabled: !!jobId,
+    enabled: !!jobId && auth.authed,
     refetchInterval: (query) => {
       const s = query.state.data?.status;
       return s === "completed" || s === "failed" ? false : 1500;
@@ -196,9 +199,29 @@ function ResultsContent() {
   const resultQuery = useQuery({
     queryKey: ["result", videoId],
     queryFn: () => getVideoResult(videoId!),
-    enabled: !!videoId && jobCompleted,
+    enabled: !!videoId && jobCompleted && auth.authed,
     retry: 3,
   });
+
+  // Mint a short-lived signed URL for the <video> element. The streaming
+  // endpoint can't accept a Bearer header (the browser's native video player
+  // doesn't send Authorization), so we get a query-string HMAC token instead.
+  // Refetch every 4 minutes — the API's tokens expire in 5.
+  const streamUrlQuery = useQuery({
+    queryKey: ["stream-url", videoId],
+    queryFn: () => getVideoStreamUrl(videoId!),
+    enabled: !!videoId && auth.authed && resultQuery.data !== undefined,
+    refetchInterval: 4 * 60 * 1000,
+    staleTime: 4 * 60 * 1000,
+  });
+
+  if (!auth.hydrated || !auth.authed) {
+    return (
+      <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (!videoId) {
     return (
@@ -336,12 +359,21 @@ function ResultsContent() {
 
         {/* Video player */}
         <div className="rounded-2xl border bg-card overflow-hidden">
-          <video
-            src={getVideoStreamUrl(result.video_id)}
-            controls
-            className="w-full h-full object-cover"
-            style={{ maxHeight: "280px" }}
-          />
+          {streamUrlQuery.data ? (
+            <video
+              src={streamUrlQuery.data}
+              controls
+              className="w-full h-full object-cover"
+              style={{ maxHeight: "280px" }}
+            />
+          ) : (
+            <div
+              className="w-full flex items-center justify-center bg-muted/30"
+              style={{ height: "280px" }}
+            >
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
           <div className="px-4 py-2 border-t flex items-center gap-2">
             <VerdictBadge verdict={result.verdict as Verdict} size="sm" />
             <span className="text-xs text-muted-foreground truncate">{result.video_name}</span>

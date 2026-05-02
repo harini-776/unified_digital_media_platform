@@ -4,9 +4,10 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getVideos } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Film, Search, ChevronLeft, ChevronRight, Upload, Clock, HardDrive, FileVideo } from "lucide-react";
+import { Film, Search, ChevronLeft, ChevronRight, Upload, Clock, HardDrive, FileVideo, Loader2 } from "lucide-react";
 import { formatBytes, formatDuration } from "@/lib/utils";
 import Link from "next/link";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 function EmptyState() {
   return (
@@ -41,6 +42,7 @@ function VideoRowSkeleton() {
 }
 
 export default function DashboardPage() {
+  const auth = useRequireAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const perPage = 12;
@@ -48,7 +50,16 @@ export default function DashboardPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["videos", page, search],
     queryFn: () => getVideos(page, perPage, search || undefined),
+    enabled: auth.authed,
   });
+
+  if (!auth.hydrated || !auth.authed) {
+    return (
+      <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   const totalPages = data ? Math.ceil(data.total / perPage) : 0;
 

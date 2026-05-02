@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Shield, Sun, Moon, Upload } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Shield, Sun, Moon, Upload, LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
+import { logout } from "@/lib/auth";
 
 const navLinks = [
   { href: "/",          label: "Home"      },
@@ -13,7 +15,14 @@ const navLinks = [
 
 export function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { theme, setTheme } = useTheme();
+  const auth = useAuth();
+
+  const onLogout = () => {
+    logout();
+    router.push("/");
+  };
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-md">
@@ -59,6 +68,46 @@ export function Navbar() {
           >
             <Upload className="w-3.5 h-3.5" /> Analyse
           </Link>
+
+          {/* Auth controls — render only after hydration so the server-rendered
+              HTML matches the first client paint (avoids a flash of stale state). */}
+          {auth.hydrated && (
+            auth.authed ? (
+              <div className="flex items-center gap-2">
+                <span
+                  className="hidden md:inline text-xs text-muted-foreground max-w-[160px] truncate"
+                  title={auth.user?.email}
+                >
+                  {auth.user?.email}
+                </span>
+                <button
+                  onClick={onLogout}
+                  className="inline-flex items-center gap-1 text-sm font-medium px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  aria-label="Log out"
+                  title="Log out"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Log out</span>
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1">
+                <Link
+                  href="/login"
+                  className="text-sm font-medium px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/register"
+                  className="hidden sm:inline-flex text-sm font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                >
+                  Sign up
+                </Link>
+              </div>
+            )
+          )}
+
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-accent transition-colors"
