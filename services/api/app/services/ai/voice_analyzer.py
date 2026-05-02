@@ -149,9 +149,18 @@ def analyze_voice(audio_path: str | None) -> dict:
     """
     Analyze audio for voice cloning / synthesis artifacts.
     Returns voice_score (0=authentic, 100=synthetic), embedding, details.
+
+    Backend dispatch (highest priority first):
+      1. VOICE_BACKEND=hf env var → HF Wav2Vec2 antispoofing classifier
+      2. weights/voice/best.pt exists → in-house VoiceModel
+      3. Heuristic (Wav2Vec2 + MFCC similarity)
     """
     if audio_path is None:
         return {"voice_score":50.0,"embedding":None,"details":{"note":"No audio"}}
+
+    if os.environ.get("VOICE_BACKEND", "").lower() == "hf":
+        from app.services.ai.voice_analyzer_hf import analyze_voice_hf
+        return analyze_voice_hf(audio_path)
 
     model, w2v = _get_voice_model()
     if model is None:
