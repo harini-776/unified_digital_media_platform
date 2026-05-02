@@ -64,6 +64,9 @@ def load_uploads_cache(cache_dir: str = UPLOADS_CACHE_DIR) -> dict[str, list[dic
     for p in files:
         d = np.load(p, allow_pickle=False)
         split = str(d["split"])
+        # Validity flags were added in B-4a; older npz files (B-3 era) don't
+        # have them. Default to True so legacy caches still work — the
+        # assertion that runs later will compute on whatever's actually present.
         by_split.setdefault(split, []).append({
             "scores":      d["scores"].astype(np.float32),       # (5,) in [0,1]
             "face_emb":    d["face_emb"].astype(np.float32),
@@ -71,6 +74,9 @@ def load_uploads_cache(cache_dir: str = UPLOADS_CACHE_DIR) -> dict[str, list[dic
             "lipsync_emb": d["lipsync_emb"].astype(np.float32),
             "label":       float(d["label"]),
             "is_synth":    bool(d["is_synth"]),
+            "face_emb_valid":    bool(d["face_emb_valid"])    if "face_emb_valid"    in d.files else True,
+            "voice_emb_valid":   bool(d["voice_emb_valid"])   if "voice_emb_valid"   in d.files else True,
+            "lipsync_emb_valid": bool(d["lipsync_emb_valid"]) if "lipsync_emb_valid" in d.files else True,
         })
     for s, items in by_split.items():
         n_pos = sum(1 for it in items if it["label"] == 1.0)
@@ -222,6 +228,35 @@ def main():
         if not by_split.get("val"):
             print("WARN: no val split — using train for val (overfitting metric, not generalization)")
             by_split["val"] = by_split["train"]
+
+        # B-4a: refuse to train if positive face or voice embeddings are mostly
+        # invalid (i.e. the HF analyzer fell back to heuristic / failed to load
+        # and returned a zero embedding). Lipsync is intentionally NOT guarded:
+        # weights/lipsync/best.pt was never trained, so the lipsync analyzer
+        # always falls back to the heuristic which returns embedding=None.
+        # The fusion model's lipsync gate sees a zero embedding by deployment
+        # design — that's a known limitation documented in JOURNAL_PAPER.md
+        # §9.2, not a B-4a regression. The lipsync SCORE is still real signal.
+        if args.mode == "full":
+            train_pos = [it for it in by_split["train"] if it["label"] == 1.0]
+            if train_pos:
+                rates = {
+                    "face":    sum(1 for it in train_pos if it["face_emb_valid"])    / len(train_pos),
+                    "voice":   sum(1 for it in train_pos if it["voice_emb_valid"])   / len(train_pos),
+                    "lipsync": sum(1 for it in train_pos if it["lipsync_emb_valid"]) / len(train_pos),
+                }
+                print(f"  positive embedding-validity rates: "
+                      f"face={rates['face']:.0%}  voice={rates['voice']:.0%}  "
+                      f"lipsync={rates['lipsync']:.0%} (lipsync expected 0%, no trained weights)")
+                # Only face and voice are gated. Lipsync is informational.
+                low = [b for b in ("face", "voice") if rates[b] < 0.80]
+                if low:
+                    raise SystemExit(
+                        f"refusing to train --mode full: positive {','.join(low)} embedding-validity "
+                        f"below 80%. Re-run extract_expert_outputs.py with FACE_BACKEND=hf "
+                        f"VOICE_BACKEND=hf, or train --mode score-only instead."
+                    )
+
         train_ds = UploadsFusionDataset(by_split["train"], fc["modality_dropout_prob"])
         val_ds   = UploadsFusionDataset(by_split["val"], 0.0)
     else:
@@ -342,6 +377,23 @@ def main():
         print(f"\nSkipping temperature calibration: val has only one class ({val_unique})")
         # Write a no-op temperature so downstream loaders don't break
         torch.save({"temperature": 1.0}, os.path.join(fc["checkpoint_dir"], "temperature.pt"))
+
+    # ── Preserve trained checkpoint as evidence (B-4a) ────────────────────
+    # The verifier's auto-rollback may overwrite weights/fusion/best.pt with the
+    # ScoreOnlyFusion baseline if FusionModel regresses. Keep a permanent
+    # timestamped copy here so we always have the trained artifact for the
+    # thesis, regardless of whether it survived the gate. Mirrors B-2a's
+    # weights/face/best_resnet18_uploads_REGRESSED.pt pattern.
+    if args.mode == "full":
+        import shutil, time as _time
+        ts = _time.strftime("%Y%m%d_%H%M%S")
+        src = os.path.join(fc["checkpoint_dir"], "best.pt")
+        dst = os.path.join(fc["checkpoint_dir"], f"best_full_{ts}.pt")
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+            print(f"  preserved trained checkpoint -> {dst}")
+        else:
+            print(f"  WARN: no best.pt to preserve at {src}")
 
     print(f"\nDone. Best val AUC-ROC: {best_auc:.4f}")
 

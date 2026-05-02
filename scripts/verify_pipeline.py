@@ -196,6 +196,24 @@ def _quality_gate(full_results: list[dict], scoreonly_results: list[dict]) -> bo
     print(f"  FusionModel     verdict={full.get('verdict')} (severity {full_sev}) fake_p={full.get('fake_probability')}")
     if full_sev < so_sev:
         print("  RESULT: REGRESSION — FusionModel is more lenient than ScoreOnlyFusion")
+        # B-4a: dump per-branch scores + verdicts to JSON so the failure mode
+        # is recoverable post-rollback. The thesis cites these numbers.
+        try:
+            import time as _time
+            ts = _time.strftime("%Y%m%d_%H%M%S")
+            telem_dir = os.path.join(REPO_ROOT, "outputs")
+            os.makedirs(telem_dir, exist_ok=True)
+            telem_path = os.path.join(telem_dir, f"gate_failure_{ts}.json")
+            with open(telem_path, "w") as f:
+                json.dump({
+                    "known_fake": fake_basename,
+                    "timestamp": ts,
+                    "scoreonly": so,
+                    "fusion": full,
+                }, f, indent=2, default=str)
+            print(f"  failure telemetry: {telem_path}")
+        except Exception as exc:
+            print(f"  WARN: telemetry dump failed ({type(exc).__name__}: {exc}); rollback proceeds")
         return False
     print("  RESULT: PASS — FusionModel verdict is at least as severe")
     return True

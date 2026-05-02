@@ -72,18 +72,16 @@ def cache_key(video_path: str, suffix: str = "") -> str:
     return f"fusion_{h}.npz"
 
 
-def perturb_audio_inplace(input_video: str, output_video: str) -> bool:
-    """
-    Re-encode video with audio degradation that mimics vocoder/synthesis artifacts:
-      - Resample audio to 8kHz then back to 16kHz (loses high frequencies)
-      - Re-encode at very low bitrate (16 kbit/s)
-      - Add band-limited noise floor
+def _run_ffmpeg(cmd: list[str], output_video: str) -> bool:
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        return result.returncode == 0 and os.path.exists(output_video) and os.path.getsize(output_video) > 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
 
-    Video stream is copy-passthrough — only audio changes. This keeps face
-    branch outputs identical (clean frames) and pushes voice branch toward fake.
-    Returns True on success.
-    """
-    # Use ffmpeg directly. afftdn-style noise + bandlimit + heavy compression.
+
+def perturb_audio_inplace(input_video: str, output_video: str) -> bool:
+    """Audio-only degradation (B-3 baseline kernel)."""
     cmd = [
         "ffmpeg", "-y", "-i", input_video,
         "-c:v", "copy",
@@ -91,11 +89,65 @@ def perturb_audio_inplace(input_video: str, output_video: str) -> bool:
         "-c:a", "aac", "-b:a", "16k",
         output_video,
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=60)
-        return result.returncode == 0 and os.path.exists(output_video) and os.path.getsize(output_video) > 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    return _run_ffmpeg(cmd, output_video)
+
+
+def perturb_video_compression(input_video: str, output_video: str) -> bool:
+    """Video-only heavy H.264 compression. Stresses the face branch — clean
+    audio passthrough means voice score should stay near real."""
+    cmd = [
+        "ffmpeg", "-y", "-i", input_video,
+        "-c:v", "libx264", "-crf", "38", "-preset", "ultrafast",
+        "-c:a", "copy",
+        output_video,
+    ]
+    return _run_ffmpeg(cmd, output_video)
+
+
+def perturb_joint_av(input_video: str, output_video: str) -> bool:
+    """Joint audio + video degradation. Stresses both branches."""
+    cmd = [
+        "ffmpeg", "-y", "-i", input_video,
+        "-c:v", "libx264", "-crf", "35", "-preset", "ultrafast",
+        "-af", "aresample=8000,aresample=16000",
+        "-c:a", "aac", "-b:a", "24k",
+        output_video,
+    ]
+    return _run_ffmpeg(cmd, output_video)
+
+
+def perturb_pitch_shift(input_video: str, output_video: str) -> bool:
+    """Voice-only: ~+1 semitone shift via asetrate trick + light denoise.
+    Different signature from perturb_audio_inplace's bandwidth degradation —
+    distinct generator-style artifact."""
+    # asetrate=16000*1.06 ≈ +1 semitone (2^(1/12) ≈ 1.0595). Then resample to
+    # restore the playback rate, so duration is preserved and pitch is shifted.
+    cmd = [
+        "ffmpeg", "-y", "-i", input_video,
+        "-c:v", "copy",
+        "-af", "asetrate=16000*1.06,aresample=16000,afftdn=nf=-25",
+        "-c:a", "aac", "-b:a", "96k",
+        output_video,
+    ]
+    return _run_ffmpeg(cmd, output_video)
+
+
+# Ordered list — kernel selection uses (hash mod len) so the order is the
+# enum. Don't reorder or insert in the middle without also bumping a cache
+# version, otherwise existing npz files become stale.
+_PERTURBATION_KERNELS = [
+    ("audio_bandlimit", perturb_audio_inplace),
+    ("video_compression", perturb_video_compression),
+    ("joint_av", perturb_joint_av),
+    ("pitch_shift", perturb_pitch_shift),
+]
+
+
+def select_kernel(filename: str) -> tuple[str, callable]:
+    """Deterministic per-filename kernel choice. Same file → same kernel
+    across runs, so re-extracting with --force is reproducible."""
+    h = int(hashlib.md5((filename + "_kernel").encode()).hexdigest()[:8], 16)
+    return _PERTURBATION_KERNELS[h % len(_PERTURBATION_KERNELS)]
 
 
 def get_dims() -> dict[str, int]:
@@ -161,8 +213,9 @@ def harvest_one_with_embs(video_path: str, label: int, is_synth: bool, split: st
             print(f"  ERROR extraction failed: {type(exc).__name__}: {exc}")
             return None
 
-        if not frames:
-            print(f"  ERROR: no frames extracted")
+        if not frames or len(frames) < 10:
+            n = len(frames) if frames else 0
+            print(f"  ERROR: too few frames ({n}); skipping (need >=10)")
             return None
 
         try:
@@ -183,23 +236,25 @@ def harvest_one_with_embs(video_path: str, label: int, is_synth: bool, split: st
         float(headmotion_r.get("headmotion_score", 50.0)) / 100.0,
     ], dtype=np.float32)
 
-    def coerce(emb, dim: int) -> np.ndarray:
+    def coerce(emb, dim: int) -> tuple[np.ndarray, bool]:
+        """Returns (embedding-of-correct-dim, valid?). Valid means: analyzer
+        returned a non-None, non-all-zero embedding (i.e. a real signal, not
+        the heuristic-fallback zero vector)."""
         if emb is None:
-            return np.zeros(dim, dtype=np.float32)
+            return np.zeros(dim, dtype=np.float32), False
         arr = np.asarray(emb, dtype=np.float32).reshape(-1)
         if arr.shape[0] != dim:
-            # Embedding shape mismatch — pad or truncate. Should not happen if
-            # dims.json is correct for the active backends; warn but proceed.
             print(f"  WARN: embedding dim mismatch (got {arr.shape[0]}, expected {dim}); padding/truncating")
             if arr.shape[0] < dim:
                 arr = np.concatenate([arr, np.zeros(dim - arr.shape[0], dtype=np.float32)])
             else:
                 arr = arr[:dim]
-        return arr
+        valid = bool(np.any(arr != 0.0))
+        return arr, valid
 
-    face_emb = coerce(face_r.get("embedding"), dims["face"])
-    voice_emb = coerce(voice_r.get("embedding"), dims["voice"])
-    lipsync_emb = coerce(lipsync_r.get("embedding"), dims["lipsync"])
+    face_emb, face_emb_valid = coerce(face_r.get("embedding"), dims["face"])
+    voice_emb, voice_emb_valid = coerce(voice_r.get("embedding"), dims["voice"])
+    lipsync_emb, lipsync_emb_valid = coerce(lipsync_r.get("embedding"), dims["lipsync"])
 
     np.savez_compressed(
         cache_path,
@@ -212,6 +267,9 @@ def harvest_one_with_embs(video_path: str, label: int, is_synth: bool, split: st
         split=split,
         face_method=face_r.get("details", {}).get("method", ""),
         voice_method=voice_r.get("details", {}).get("method", ""),
+        face_emb_valid=np.bool_(face_emb_valid),
+        voice_emb_valid=np.bool_(voice_emb_valid),
+        lipsync_emb_valid=np.bool_(lipsync_emb_valid),
     )
     return {
         "scores": score_vec.tolist(),
@@ -220,6 +278,9 @@ def harvest_one_with_embs(video_path: str, label: int, is_synth: bool, split: st
         "is_synth": is_synth,
         "face_method": face_r.get("details", {}).get("method", ""),
         "voice_method": voice_r.get("details", {}).get("method", ""),
+        "face_emb_valid": face_emb_valid,
+        "voice_emb_valid": voice_emb_valid,
+        "lipsync_emb_valid": lipsync_emb_valid,
     }
 
 
@@ -251,41 +312,60 @@ def main():
     if args.limit:
         uploads = uploads[:args.limit]
 
-    worklist: list[tuple[str, int, bool, str, str]] = []   # (path, label, is_synth, split, key_suffix)
+    # Worklist tuple: (path, label, is_synth, split, key_suffix, kernel_name)
+    # kernel_name is "" for non-synth entries.
+    worklist: list[tuple[str, int, bool, str, str, str]] = []
 
     # The known fake: forced into 'train' so fusion has a real positive to learn from
-    worklist.append((KNOWN_FAKE, 1, False, "train", ""))
+    worklist.append((KNOWN_FAKE, 1, False, "train", "", ""))
 
     # All real uploads
     for fname in uploads:
-        worklist.append((os.path.join(UPLOADS_DIR, fname), 0, False, deterministic_split(fname), ""))
+        worklist.append((os.path.join(UPLOADS_DIR, fname), 0, False, deterministic_split(fname), "", ""))
 
-    # Synthetic audio-perturbed positives — perturb a deterministic subset of reals
+    # Synthetic positives — pick a deterministic subset of reals; each gets ONE
+    # of the four kernels chosen by filename hash. B-4a: this replaces B-3's
+    # single-kernel signature with 4-way diversity, so the model can't memorize
+    # "this perturbation = fake" without learning generalizable features.
     if not args.no_synth:
-        # Pick reals with hash mod < SYNTH_AUDIO_FRACTION (deterministic, reproducible)
         synth_reals = [f for f in uploads
                        if (int(hashlib.md5(f.encode()).hexdigest()[8:16], 16) / 0xFFFFFFFF) < SYNTH_AUDIO_FRACTION]
-        print(f"Will generate {len(synth_reals)} synthetic audio-fake positives "
-              f"({SYNTH_AUDIO_FRACTION:.0%} of reals)")
+        kernel_counts: dict[str, int] = {name: 0 for name, _ in _PERTURBATION_KERNELS}
         for fname in synth_reals:
-            worklist.append((os.path.join(UPLOADS_DIR, fname), 1, True, deterministic_split(fname), "_audiofake"))
+            kernel_name, _ = select_kernel(fname)
+            kernel_counts[kernel_name] += 1
+            # Cache suffix encodes the kernel name so re-runs with a different
+            # kernel set don't collide with stale npz files.
+            suffix = f"_synth_{kernel_name}"
+            worklist.append((os.path.join(UPLOADS_DIR, fname), 1, True,
+                             deterministic_split(fname), suffix, kernel_name))
+        print(f"Will generate {len(synth_reals)} synthetic positives "
+              f"({SYNTH_AUDIO_FRACTION:.0%} of reals), kernel mix: {kernel_counts}")
 
     print(f"\nTotal worklist: {len(worklist)} samples")
     splits = {"train": 0, "val": 0, "test": 0}
-    for _, _, _, split, _ in worklist:
+    for _, _, _, split, _, _ in worklist:
         splits[split] += 1
     print(f"  per split: {splits}")
-    pos = sum(1 for _, lbl, _, _, _ in worklist if lbl == 1)
+    pos = sum(1 for _, lbl, _, _, _, _ in worklist if lbl == 1)
     print(f"  positives (fake): {pos}, negatives (real): {len(worklist) - pos}")
+
+    # Map kernel names back to functions for dispatch.
+    kernel_fn_by_name = {name: fn for name, fn in _PERTURBATION_KERNELS}
 
     # ── Process each ────────────────────────────────────────────
     n_done = 0
     n_skip = 0
     n_fail = 0
+    # Embedding-validity tallies: how often did each branch return a real
+    # (non-fallback) embedding? Reported per-class so we can spot e.g. face
+    # detector failing more on positives than negatives.
+    valid_counts = {"pos": {"face": 0, "voice": 0, "lipsync": 0, "total": 0},
+                    "neg": {"face": 0, "voice": 0, "lipsync": 0, "total": 0}}
     t0 = time.time()
     synth_workdir = tempfile.mkdtemp(prefix="extract_synth_")
     try:
-        for idx, (vpath, label, is_synth, split, key_suffix) in enumerate(worklist, 1):
+        for idx, (vpath, label, is_synth, split, key_suffix, kernel_name) in enumerate(worklist, 1):
             cache_path = os.path.join(CACHE_DIR, cache_key(vpath, key_suffix))
             if os.path.exists(cache_path):
                 n_skip += 1
@@ -293,15 +373,16 @@ def main():
 
             elapsed = time.time() - t0
             eta_s = (elapsed / max(n_done, 1)) * (len(worklist) - n_done) if n_done > 0 else 0
-            print(f"[{idx}/{len(worklist)}] {os.path.basename(vpath)}{'(synth-audio)' if is_synth else ''} "
+            tag = f"(synth:{kernel_name})" if is_synth else ""
+            print(f"[{idx}/{len(worklist)}] {os.path.basename(vpath)}{tag} "
                   f"label={label} split={split} (elapsed {elapsed/60:.1f}m, eta {eta_s/60:.1f}m)")
 
             actual_path = vpath
             if is_synth:
-                # Generate audio-perturbed copy in a temp file
-                synth_path = os.path.join(synth_workdir, f"{idx}_audiofake.mp4")
-                if not perturb_audio_inplace(vpath, synth_path):
-                    print(f"  WARN: audio perturbation failed; skipping")
+                synth_path = os.path.join(synth_workdir, f"{idx}_{kernel_name}.mp4")
+                kernel_fn = kernel_fn_by_name[kernel_name]
+                if not kernel_fn(vpath, synth_path):
+                    print(f"  WARN: perturbation '{kernel_name}' failed; skipping")
                     n_fail += 1
                     continue
                 actual_path = synth_path
@@ -311,6 +392,14 @@ def main():
                 n_fail += 1
             else:
                 n_done += 1
+                bucket = "pos" if label == 1 else "neg"
+                valid_counts[bucket]["total"] += 1
+                if summary.get("face_emb_valid"):
+                    valid_counts[bucket]["face"] += 1
+                if summary.get("voice_emb_valid"):
+                    valid_counts[bucket]["voice"] += 1
+                if summary.get("lipsync_emb_valid"):
+                    valid_counts[bucket]["lipsync"] += 1
                 # Light progress: print scores for the known fake + first few uploads so the user sees signal
                 if idx <= 3 or vpath == KNOWN_FAKE or is_synth:
                     s = summary["scores"]
@@ -324,6 +413,31 @@ def main():
     print(f"  cached: {n_done}, skipped (already cached): {n_skip}, failed: {n_fail}")
     print(f"  total time: {(time.time() - t0) / 60:.1f}m")
     print(f"  cache dir: {CACHE_DIR}")
+
+    # ── Embedding-validity report ────────────────────────────────
+    # train_fusion.py gates on face + voice embedding validity. Lipsync is
+    # informational only — weights/lipsync/best.pt was never trained, so the
+    # lipsync analyzer always falls back to its heuristic (embedding=None).
+    # An expected 0% lipsync validity is the deployment reality, not a bug.
+    GATED_BRANCHES = {"face", "voice"}
+    print("\n=== embedding validity ===")
+    for bucket in ("pos", "neg"):
+        c = valid_counts[bucket]
+        n = c["total"]
+        if n == 0:
+            continue
+        label_name = "positives (fake)" if bucket == "pos" else "negatives (real)"
+        print(f"  {label_name} (n={n}):")
+        for branch in ("face", "voice", "lipsync"):
+            v = c[branch]
+            pct = (v / n) * 100.0
+            if branch == "lipsync":
+                flag = "  (heuristic-only — no trained weights)"
+            elif branch in GATED_BRANCHES and pct < 80 and bucket == "pos":
+                flag = " *LOW — train_fusion will refuse*"
+            else:
+                flag = ""
+            print(f"    {branch}_emb_valid: {v}/{n} ({pct:.0f}%){flag}")
 
 
 if __name__ == "__main__":
