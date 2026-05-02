@@ -84,6 +84,11 @@ class FaceTemporalModel(nn.Module):
             enc = tvm.resnet50(weights=weights)
             spatial_dim = enc.fc.in_features
             enc.fc = nn.Identity()
+        elif backbone == "resnet18":
+            weights = tvm.ResNet18_Weights.DEFAULT if pretrained else None
+            enc = tvm.resnet18(weights=weights)
+            spatial_dim = enc.fc.in_features
+            enc.fc = nn.Identity()
         else:
             raise ValueError(f"Unknown backbone: {backbone}")
 

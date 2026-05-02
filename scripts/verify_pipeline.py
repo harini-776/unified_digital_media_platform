@@ -24,6 +24,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "services/api"))
 sys.path.insert(0, REPO_ROOT)
 
+# Pydantic Settings reads .env relative to CWD. The app's .env lives at
+# services/api/.env, so chdir there before importing any module that touches
+# settings (every app.* import does, transitively via app.core.database).
+os.chdir(os.path.join(REPO_ROOT, "services/api"))
+
 VERDICT_SEVERITY = {"authentic": 0, "suspicious": 1, "manipulated": 2}
 KNOWN_FAKE = os.path.join(REPO_ROOT, "deepfake_test_video.mp4")
 UPLOADS_DIR = os.path.join(REPO_ROOT, "services/api/uploads")

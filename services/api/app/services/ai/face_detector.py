@@ -41,11 +41,23 @@ def _get_face_model():
         if root not in sys.path:
             sys.path.insert(0, root)
         from ml.models.face_model import FaceTemporalModel
-        model = FaceTemporalModel(backbone="efficientnet_b4", temporal="transformer", pretrained=False)
         ckpt = torch.load(_WEIGHTS, map_location="cpu")
+        # Read architecture metadata stored alongside the state_dict by
+        # scripts/train_face.py. Older checkpoints (before that change) lack
+        # these keys — fall back to the original efficientnet_b4 default.
+        model = FaceTemporalModel(
+            backbone=ckpt.get("backbone", "efficientnet_b4"),
+            temporal=ckpt.get("temporal", "transformer"),
+            embedding_dim=ckpt.get("embedding_dim", 256),
+            num_heads=ckpt.get("num_heads", 4),
+            num_layers=ckpt.get("num_layers", 2),
+            dropout=ckpt.get("dropout", 0.3),
+            pretrained=False,
+        )
         model.load_state_dict(ckpt["model_state"])
         model.eval().to(settings.model_device)
         _face_model = model
+        print(f"[face_detector] loaded {ckpt.get('backbone', 'efficientnet_b4')} face model")
         return model
     except Exception as exc:
         print(f"[face_detector] model load failed: {exc}")
@@ -212,9 +224,20 @@ def _heuristic_score(frame_paths):
 
 
 def analyze_faces(frame_paths: list[str]) -> dict:
-    """Analyze frames for face manipulation. Returns face_score (0-100), embedding, details."""
+    """
+    Analyze frames for face manipulation. Returns face_score (0-100), embedding, details.
+
+    Backend dispatch (highest priority first):
+      1. FACE_BACKEND=hf env var → HF ViT deepfake classifier (face_detector_hf)
+      2. weights/face/best.pt exists → in-house FaceTemporalModel
+      3. Heuristic (MTCNN multi-face + texture frequency analysis)
+    """
     if not frame_paths:
         return {"face_score":50.0,"embedding":None,"details":{"note":"No frames"}}
+
+    if os.environ.get("FACE_BACKEND", "").lower() == "hf":
+        from app.services.ai.face_detector_hf import analyze_faces_hf
+        return analyze_faces_hf(frame_paths)
 
     model = _get_face_model()
     if model is None:
