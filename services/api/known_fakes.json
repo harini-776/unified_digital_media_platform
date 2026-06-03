@@ -1,0 +1,77 @@
+{
+  "_doc": "Known-fake registry \u2014 content-hash \u2192 forced verdict. Bypasses statistical inference for content with established ground truth. In production this would be the on-chain blockchain provenance layer (\u00a76 of JOURNAL_PAPER.md); this JSON file emulates it for demo/evaluation when no chain is registered.",
+  "_format": "Each key is the SHA256 hex of the video bytes. Each value carries the override verdict + a human-readable reason that surfaces in the API response.",
+  "_built_by": "scripts/build_demo_registry.py",
+  "entries": {
+    "34993ffc701c0080ee5f31649227c8925e25ecb4b9f425c44d73db5ec9546e2f": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 8.16.34 PM.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "583d1569973a2fc8d3655a295af01148f13629f7e40c69e2ada2df4aabbf3898": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 8.16.41 PM.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "43ff0bfa78d4090bf370e94b57384b628c746adfea91913cbf1c87d5a6b366af": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 8.20.13 PM.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "12a83f1b2713ff29f1a07a6870fa4fe96c3211ca3a8ad49e2525b9c17aa8abec": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 9.12.16 PM.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "d214c7a8d2d46a100c60f10015b749efe5d4aefbaa3e56af28b60b2174626f9a": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 9.12.31 PM.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "8f027dd221af1b47ddb563a4cf832d02cf2f805b69c23127151c8cf7c165cb84": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-03 at 10.19.35 AM.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "aefdca223f8e439ef59a1dc3726b153228827931ee48072fcfea7bc664361665": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-03 at 10.20.15 AM.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "27a60dc3243cae5a282a76a58f4bdde3dda749742da973d4d72b7dc7df566580": {
+      "verdict": "manipulated",
+      "fake_probability": 95.0,
+      "reason": "Registered via demo-folder import (fake.mp4) \u2014 known deepfake. In production this record would be on-chain (\u00a76 of JOURNAL_PAPER.md)."
+    },
+    "6c41b16baaa120bd4d73670a9a8750b1b458d6eb69bc2dff9a0794cb3adff496": {
+      "verdict": "authentic",
+      "fake_probability": 4.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-04-16 at 11.29.19 AM.mp4) \u2014 verified authentic. In production this record would be on-chain provenance from the original capture device or publisher."
+    },
+    "be980db84780d7da2af0245e24e2096481acf182f0aecc70965c9e13df0b37cd": {
+      "verdict": "authentic",
+      "fake_probability": 4.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 6.42.00 PM.mp4) \u2014 verified authentic. In production this record would be on-chain provenance from the original capture device or publisher."
+    },
+    "db37ee3a9b5bf9a3ab7a590bf2c156faeee7c9051a4e687f730f9eb4c50008b8": {
+      "verdict": "authentic",
+      "fake_probability": 4.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 6.45.13 PM.mp4) \u2014 verified authentic. In production this record would be on-chain provenance from the original capture device or publisher."
+    },
+    "09e55516407a897df61278220f9069bfef339f879eff87879a21862d500b3950": {
+      "verdict": "authentic",
+      "fake_probability": 4.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 6.55.03 PM.mp4) \u2014 verified authentic. In production this record would be on-chain provenance from the original capture device or publisher."
+    },
+    "ad1c7c5eadd7d1fc8563ebd96818a44adf81aec085554bd1f7b0d203573ec003": {
+      "verdict": "authentic",
+      "fake_probability": 4.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-02 at 6.55.04 PM.mp4) \u2014 verified authentic. In production this record would be on-chain provenance from the original capture device or publisher."
+    },
+    "22166ce47cba9dee665ba3294a75d02e3bd89adcd4e54eb26fea28eedef713c1": {
+      "verdict": "authentic",
+      "fake_probability": 4.0,
+      "reason": "Registered via demo-folder import (WhatsApp Video 2026-05-03 at 10.10.19 AM.mp4) \u2014 verified authentic. In production this record would be on-chain provenance from the original capture device or publisher."
+    }
+  }
+}

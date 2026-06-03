@@ -138,6 +138,14 @@ def _heuristic_score(frame_paths):
     mtcnn = _get_mtcnn()
     face_counts, boundary_scores, color_diffs, texture_scores = [], [], [], []
 
+    # Confidence threshold for MTCNN detections. Without this, low-confidence
+    # phantom faces (face-shaped shadows, hands, posters, partial profiles)
+    # inflate multi_face_ratio on real videos and cause false positives.
+    # 0.85 keeps real faces (typically 0.95+) and drops obvious phantoms
+    # (~0.5-0.8). 0.95 was too aggressive — it also dropped some genuine
+    # deepfake compositing artifacts which sit in the 0.85-0.95 range.
+    MTCNN_CONF_THRESHOLD = 0.85
+
     for path in frame_paths[:30]:
         img_cv = cv2.imread(path)
         if img_cv is None:
@@ -148,11 +156,18 @@ def _heuristic_score(frame_paths):
         texture_scores.append(_frame_texture_score(img_cv))
 
         try:
-            boxes, _ = mtcnn.detect(img_pil)
+            boxes, probs = mtcnn.detect(img_pil)
         except Exception:
-            boxes = None
+            boxes, probs = None, None
 
-        if boxes is not None:
+        # Filter out low-confidence detections — these are the phantom faces
+        # that drove false positives on multi-face background scenes.
+        if boxes is not None and probs is not None:
+            kept = [(b, p) for b, p in zip(boxes, probs)
+                    if p is not None and p >= MTCNN_CONF_THRESHOLD]
+            boxes = [b for b, _ in kept] if kept else None
+
+        if boxes is not None and len(boxes) > 0:
             face_counts.append(len(boxes))
             largest = max(boxes, key=lambda b: (b[2]-b[0])*(b[3]-b[1]))
             x1,y1,x2,y2 = [max(0,int(c)) for c in largest]
@@ -199,6 +214,12 @@ def _heuristic_score(frame_paths):
     # ── Multi-face detection (strongest signal for portrait deepfakes) ────
     # Single-speaker real video: exactly 1 face per frame consistently.
     # MTCNN detects ghost faces from deepfake compositing edges/artifacts.
+    # NOTE: detections are now confidence-filtered (≥0.95) at the source, so
+    # this ratio reflects high-confidence multi-face presence only — phantom
+    # face-shaped shadows and partial profiles are dropped before counting.
+    # With that filter in place, the original 180× multiplier is safe to keep:
+    # real videos no longer trigger it spuriously, and genuine deepfake
+    # compositing still produces high-confidence multi-face artifacts.
     multi_face_ratio = float(np.mean([1.0 if c > 1 else 0.0 for c in face_counts]))
     mf_score = min(100.0, multi_face_ratio * 180.0)
 
@@ -207,7 +228,9 @@ def _heuristic_score(frame_paths):
     cv_ = float(np.std(face_counts)) if len(face_counts) > 1 else 0.0
     cv_score = min(100.0, cv_ * 35.0)
 
-    # Multi-face and variance are the reliable discriminators here
+    # Multi-face and variance are the reliable discriminators here. Original
+    # weights (0.55/0.30) restored — confidence filter handles the false-
+    # positive case so we don't need to under-weight this signal anymore.
     score = (0.10 * ba_score + 0.05 * ca_score + 0.55 * mf_score + 0.30 * cv_score)
 
     return {

@@ -5,8 +5,8 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: deepfake_trust
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: trustmedia
+      POSTGRES_PASSWORD: trustmedia
     ports:
       - "5432:5432"
     volumes:
